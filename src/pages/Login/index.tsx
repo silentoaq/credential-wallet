@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/exhaustive-deps */
 import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
@@ -44,17 +43,10 @@ const LoginPage = () => {
 
   // 如果已認證，重定向到來源頁面或首頁
   useEffect(() => {
-    if (connected && isAuthenticated) {
+    if (connected && isAuthenticated && !authLoading) {
       navigate(from, { replace: true });
     }
-  }, [connected, isAuthenticated, navigate, from]);
-
-  // 錢包連接後，自動進行身份驗證
-  useEffect(() => {
-    if (connected && !isAuthenticated && !authLoading && !isAuthenticating) {
-      handleAuthentication();
-    }
-  }, [connected, isAuthenticated, authLoading]);
+  }, [connected, isAuthenticated, authLoading, navigate, from]);
 
   return (
     <Box
@@ -96,36 +88,35 @@ const LoginPage = () => {
           />
           
           <Typography variant="h5" component="h2" gutterBottom>
-            連接您的錢包
+            {!connected ? '連接您的錢包' : '完成身份驗證'}
           </Typography>
           
           <Typography 
             variant="body1" 
             align="center" 
             color="text.secondary"
-            paragraph
             sx={{ mb: 4 }}
           >
-            使用 Phantom 錢包連接以管理您的數位憑證和安全地存儲您的資訊。
+            {!connected 
+              ? '使用 Phantom 錢包連接以管理您的數位憑證和安全地存儲您的資訊。'
+              : '請點擊下方按鈕進行簽名，以完成身份驗證流程。'
+            }
           </Typography>
           
+          {/* 步驟1：連接錢包 */}
           {!connected && <WalletConnectButton />}
           
+          {/* 步驟2：簽署訊息 */}
           {connected && !isAuthenticated && (
-            <>
-              <Typography variant="body1" sx={{ mb: 2 }}>
-                錢包已連接，請簽名以完成認證
-              </Typography>
-              
-              <Button 
-                variant="contained" 
-                onClick={handleAuthentication}
-                disabled={isAuthenticating || authLoading}
-                startIcon={isAuthenticating ? <CircularProgress size={20} /> : null}
-              >
-                {isAuthenticating ? '處理中...' : '簽名並登入'}
-              </Button>
-            </>
+            <Button 
+              variant="contained" 
+              onClick={handleAuthentication}
+              disabled={isAuthenticating || authLoading}
+              startIcon={isAuthenticating ? <CircularProgress size={20} /> : null}
+              fullWidth
+            >
+              {isAuthenticating ? '處理中...' : '簽名並登入'}
+            </Button>
           )}
           
           {error && (
