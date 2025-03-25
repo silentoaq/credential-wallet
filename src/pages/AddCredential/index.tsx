@@ -57,53 +57,61 @@ const AddCredentialPage = () => {
   }, [searchParams]);
 
   // 啟動QR掃描器
-  const startScanner = () => {
+  const startScanner = async () => {
     const container = document.getElementById(qrScannerId);
     if (!container) return;
 
     // 清空容器
     container.innerHTML = '';
 
-    // 初始化掃描器
-    html5QrCodeRef.current = new Html5Qrcode(qrScannerId);
-    
-    // 獲取相機列表
-    Html5Qrcode.getCameras()
-      .then(devices => {
-        if (devices && devices.length) {
-          // 啟動掃描
-          const cameraId = devices[0].id;
-          
-          html5QrCodeRef.current?.start(
-            cameraId, 
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 250 },
-            },
-            (decodedText) => {
-              // 停止掃描
-              stopScanner();
-              
-              // 處理掃描到的數據
-              handleScannedData(decodedText);
-            },
-            (errorMessage) => {
-              // 錯誤處理
-              console.log(errorMessage);
-            }
-          )
-          .catch(err => {
-            console.error('啟動掃描器失敗:', err);
-            showSnackbar('無法啟動掃描器', 'error');
-          });
-        } else {
-          showSnackbar('找不到相機裝置', 'error');
+    try {
+      // 初始化掃描器
+      html5QrCodeRef.current = new Html5Qrcode(qrScannerId);
+      
+      // 獲取相機列表
+      const devices = await Html5Qrcode.getCameras();
+      
+      if (devices && devices.length) {
+        // 默認使用後置相機（如果有多個相機）
+        let selectedCameraId = devices[0].id;
+        if (devices.length > 1) {
+          // 嘗試找到後置相機，它通常包含"back"或不包含"front"
+          const backCamera = devices.find(camera => 
+            camera.label.toLowerCase().includes('back') || 
+            !camera.label.toLowerCase().includes('front')
+          );
+          if (backCamera) {
+            selectedCameraId = backCamera.id;
+          }
         }
-      })
-      .catch(err => {
-        console.error('獲取相機列表失敗:', err);
-        showSnackbar('無法存取相機', 'error');
-      });
+        
+        // 啟動掃描
+        await html5QrCodeRef.current.start(
+          selectedCameraId, 
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.0
+          },
+          (decodedText) => {
+            // 停止掃描
+            stopScanner();
+            
+            // 處理掃描到的數據
+            handleScannedData(decodedText);
+          },
+          (errorMessage) => {
+            // 錯誤處理
+            console.log(errorMessage);
+          }
+        );
+      } else {
+        showSnackbar('找不到相機裝置', 'error');
+      }
+    } catch (err) {
+      console.error('啟動掃描器失敗:', err);
+      showSnackbar('無法啟動掃描器', 'error');
+    }
   };
 
   // 停止QR掃描器
@@ -131,40 +139,63 @@ const AddCredentialPage = () => {
     try {
       setIsProcessing(true);
       
+      // 預處理數據
+      const trimmedData = data.trim();
+      
       // 嘗試解析為JSON
-      let qrData: QRCodeData;
+      let qrData: QRCodeData | null = null;
       
       try {
-        qrData = JSON.parse(data) as QRCodeData;
+        // 嘗試解析為JSON
+        qrData = JSON.parse(trimmedData) as QRCodeData;
       } catch (e) {
-        // 如果不是JSON，假設它是URL
-        // 在實際應用中，您應該進行更嚴格的URL驗證
-        if (data.startsWith('http') || data.startsWith('didholder://')) {
-          // 處理深度連結
-          await handleDeepLink(data);
+        // 不是JSON，進行其他格式檢查
+        
+        // 檢查是否是URL
+        if (trimmedData.startsWith('http') || trimmedData.startsWith('didholder://')) {
+          await handleDeepLink(trimmedData);
           return;
-        } else if (data.startsWith('eyJ')) {
-          // 可能是JWT
-          await processCredential(data);
+        } 
+        // 檢查是否是JWT
+        else if (trimmedData.startsWith('eyJ')) {
+          await processCredential(trimmedData);
           return;
+        }
+        // 檢查是否是JSON字符串但包含額外字符
+        else if (trimmedData.includes('{') && trimmedData.includes('}')) {
+          try {
+            // 嘗試提取JSON部分
+            const jsonMatch = trimmedData.match(/{[\s\S]*}/);
+            if (jsonMatch) {
+              qrData = JSON.parse(jsonMatch[0]) as QRCodeData;
+            } else {
+              throw new Error('不支援的QR碼格式');
+            }
+          } catch {
+            throw new Error('無法解析QR碼內容');
+          }
         } else {
           throw new Error('不支援的QR碼格式');
         }
       }
       
       // 根據掃描到的QR碼類型處理
-      switch(qrData.type) {
-        case QRCodeType.DID_CONNECT:
-          await handleDidConnect(qrData);
-          break;
-        case QRCodeType.CREDENTIAL_OFFER:
-          await handleCredentialOffer(qrData);
-          break;
-        case QRCodeType.CREDENTIAL_SHARE:
-          await handleCredentialShare(qrData);
-          break;
-        default:
-          throw new Error('未知的QR碼類型');
+      if (qrData) {
+        switch(qrData.type) {
+          case QRCodeType.DID_CONNECT:
+            await handleDidConnect(qrData);
+            break;
+          case QRCodeType.CREDENTIAL_OFFER:
+            await handleCredentialOffer(qrData);
+            break;
+          case QRCodeType.CREDENTIAL_SHARE:
+            await handleCredentialShare(qrData);
+            break;
+          default:
+            throw new Error('未知的QR碼類型');
+        }
+      } else {
+        throw new Error('無法識別QR碼內容');
       }
     } catch (error) {
       console.error('處理掃描數據錯誤:', error);

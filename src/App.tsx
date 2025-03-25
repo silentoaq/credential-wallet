@@ -12,6 +12,7 @@ import BottomNavigation from './components/layout/BottomNavigation'
 import ProtectedRoute from './components/layout/ProtectedRoute'
 import WalletConnectionProvider from './context/WalletContext'
 import CredentialProvider from './context/CredentialContext'
+import CredentialDetailPage from './pages/CredentialDetail'
 
 // 主應用程式元件
 const App = () => {
@@ -81,6 +82,12 @@ const App = () => {
                 <ProtectedRoute>
                   <AddCredentialPage />
                 </ProtectedRoute>
+              } />
+
+              <Route path="/credential/:id" element={
+                  <ProtectedRoute>
+                    <CredentialDetailPage />
+                  </ProtectedRoute>
               } />
               
               <Route path="/settings" element={
