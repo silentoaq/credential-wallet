@@ -1,7 +1,7 @@
 import { createTheme } from '@mui/material/styles';
 
-// 定義應用程式的主題
-const theme = createTheme({
+// 定義深色主題 (基於原有主題)
+const darkTheme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
@@ -73,4 +73,4 @@ const theme = createTheme({
   },
 });
 
-export default theme;
+export default darkTheme;

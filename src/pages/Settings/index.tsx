@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Box, 
@@ -31,19 +31,26 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import { useWalletConnection } from '../../context/WalletContext';
 import { useCredentials } from '../../context/CredentialContext';
+import { useTheme } from '../../context/ThemeContext';
 
 const SettingsPage = () => {
   const navigate = useNavigate();
   const { disconnect, did, publicKey } = useWalletConnection();
   const { clearAllCredentials } = useCredentials();
+  const { mode, toggleTheme } = useTheme();
   
   const [biometricEnabled, setBiometricEnabled] = useState(false);
-  const [darkModeEnabled, setDarkModeEnabled] = useState(true);
+  const [darkModeEnabled, setDarkModeEnabled] = useState(mode === 'dark');
   
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [dialogAction, setDialogAction] = useState<'clearCredentials' | 'disconnect'>('disconnect');
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
+
+  // 同步主題狀態
+  useEffect(() => {
+    setDarkModeEnabled(mode === 'dark');
+  }, [mode]);
 
   // 顯示確認對話框
   const showConfirmDialog = (action: 'clearCredentials' | 'disconnect') => {
@@ -81,9 +88,9 @@ const SettingsPage = () => {
 
   // 處理暗黑模式切換
   const handleDarkModeToggle = () => {
-    setDarkModeEnabled(prev => !prev);
+    toggleTheme();
     showSnackbar(darkModeEnabled ? '淺色模式已啟用' : '深色模式已啟用');
-    // 在實際應用中，您應該在此處更新應用的主題
+    setDarkModeEnabled(prev => !prev);
   };
 
   return (
