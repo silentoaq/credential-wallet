@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react-hooks/exhaustive-deps */
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Box, 
@@ -28,7 +27,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { Html5Qrcode } from 'html5-qrcode';
 import { useWalletConnection } from '../../context/WalletContext';
 import { useCredentials } from '../../context/CredentialContext';
-import { QRCodeType, QRCodeData } from '../../types';
+import { QRCodeType } from '../../types';
+import credentialApi from '../../services/credentialApi';
 
 // QR掃描器ID
 const qrScannerId = 'html5-qr-code-scanner';
@@ -57,7 +57,7 @@ const AddCredentialPage = () => {
   }, [searchParams]);
 
   // 啟動QR掃描器
-  const startScanner = async () => {
+  const startScanner = useCallback(async () => {
     const container = document.getElementById(qrScannerId);
     if (!container) return;
 
@@ -112,10 +112,10 @@ const AddCredentialPage = () => {
       console.error('啟動掃描器失敗:', err);
       showSnackbar('無法啟動掃描器', 'error');
     }
-  };
+  }, []);
 
   // 停止QR掃描器
-  const stopScanner = () => {
+  const stopScanner = useCallback(() => {
     if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
       html5QrCodeRef.current.stop()
         .then(() => {
@@ -125,77 +125,59 @@ const AddCredentialPage = () => {
           console.error('停止掃描器失敗:', err);
         });
     }
-  };
+  }, []);
 
   // 顯示通知
-  const showSnackbar = (message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
     setSnackbarMessage(message);
     setSnackbarSeverity(severity);
     setSnackbarOpen(true);
-  };
+  }, []);
 
   // 處理掃描到的數據
-  const handleScannedData = async (data: string) => {
+  const handleScannedData = useCallback(async (data: string) => {
     try {
       setIsProcessing(true);
       
-      // 預處理數據
-      const trimmedData = data.trim();
+      // 使用通用解析函數解析QR碼數據
+      const qrData = credentialApi.parseQrCodeData(data);
       
-      // 嘗試解析為JSON
-      let qrData: QRCodeData | null = null;
-      
-      try {
-        // 嘗試解析為JSON
-        qrData = JSON.parse(trimmedData) as QRCodeData;
-      } catch (e) {
-        // 不是JSON，進行其他格式檢查
-        
-        // 檢查是否是URL
-        if (trimmedData.startsWith('http') || trimmedData.startsWith('didholder://')) {
-          await handleDeepLink(trimmedData);
-          return;
-        } 
-        // 檢查是否是JWT
-        else if (trimmedData.startsWith('eyJ')) {
-          await processCredential(trimmedData);
-          return;
-        }
-        // 檢查是否是JSON字符串但包含額外字符
-        else if (trimmedData.includes('{') && trimmedData.includes('}')) {
-          try {
-            // 嘗試提取JSON部分
-            const jsonMatch = trimmedData.match(/{[\s\S]*}/);
-            if (jsonMatch) {
-              qrData = JSON.parse(jsonMatch[0]) as QRCodeData;
-            } else {
-              throw new Error('不支援的QR碼格式');
-            }
-          } catch {
-            throw new Error('無法解析QR碼內容');
-          }
-        } else {
-          throw new Error('不支援的QR碼格式');
-        }
+      if (!qrData) {
+        throw new Error('無法解析QR碼內容');
       }
       
+      console.log('解析的 QR 碼數據:', qrData);
+      
       // 根據掃描到的QR碼類型處理
-      if (qrData) {
-        switch(qrData.type) {
-          case QRCodeType.DID_CONNECT:
-            await handleDidConnect(qrData);
-            break;
-          case QRCodeType.CREDENTIAL_OFFER:
-            await handleCredentialOffer(qrData);
-            break;
-          case QRCodeType.CREDENTIAL_SHARE:
-            await handleCredentialShare(qrData);
-            break;
-          default:
-            throw new Error('未知的QR碼類型');
-        }
-      } else {
-        throw new Error('無法識別QR碼內容');
+      switch(qrData.type) {
+        case QRCodeType.DID_CONNECT:
+          if (!qrData.applicationId || !qrData.issuerDomain) {
+            throw new Error('缺少必要參數');
+          }
+          await handleDidConnect(qrData.applicationId, qrData.issuerDomain);
+          break;
+        
+        case QRCodeType.CREDENTIAL_OFFER:
+          if (!qrData.preAuthCode || !qrData.issuerDomain) {
+            throw new Error('缺少必要參數');
+          }
+          await handleCredentialOffer(qrData.preAuthCode, qrData.issuerDomain);
+          break;
+        
+        case QRCodeType.CREDENTIAL_SHARE:
+          if (qrData.rawCredential) {
+            await processCredential(qrData.rawCredential);
+          } else if (qrData.credentialData) {
+            await processCredential(JSON.stringify(qrData.credentialData));
+          } else if (qrData.url) {
+            await processCredential(qrData.url);
+          } else {
+            throw new Error('缺少憑證數據');
+          }
+          break;
+        
+        default:
+          throw new Error('未知的QR碼類型');
       }
     } catch (error) {
       console.error('處理掃描數據錯誤:', error);
@@ -204,99 +186,40 @@ const AddCredentialPage = () => {
       setIsProcessing(false);
       setScannerOpen(false);
     }
-  };
-
-  // 處理深度連結
-  const handleDeepLink = async (url: string) => {
-    try {
-      // 解析URL
-      let parsedUrl: URL;
-      if (url.startsWith('didholder://')) {
-        // 將自定義協議轉換為臨時HTTP URL以進行解析
-        parsedUrl = new URL(url.replace('didholder://', 'http://'));
-      } else {
-        parsedUrl = new URL(url);
-      }
-      
-      // 檢查URL路徑/協議
-      if (url.includes('connect') || parsedUrl.pathname.includes('connect')) {
-        // 處理DID連接請求
-        const applicationId = parsedUrl.searchParams.get('application_id');
-        const issuer = parsedUrl.searchParams.get('issuer');
-        
-        if (applicationId && issuer) {
-          await handleDidConnect({
-            type: QRCodeType.DID_CONNECT,
-            applicationId,
-            issuer
-          });
-        } else {
-          throw new Error('連接請求缺少必要參數');
-        }
-      } else if (url.includes('credential') || parsedUrl.pathname.includes('credential')) {
-        // 處理憑證請求
-        const preAuthCode = parsedUrl.searchParams.get('pre_auth_code');
-        const issuer = parsedUrl.searchParams.get('issuer');
-        
-        if (preAuthCode && issuer) {
-          await handleCredentialOffer({
-            type: QRCodeType.CREDENTIAL_OFFER,
-            preAuthCode,
-            issuer
-          });
-        } else {
-          throw new Error('憑證請求缺少必要參數');
-        }
-      } else {
-        throw new Error('不支援的深度連結格式');
-      }
-    } catch (error) {
-      console.error('處理深度連結錯誤:', error);
-      throw new Error('無法處理深度連結');
-    }
-  };
+  }, [isAuthenticated, did, showSnackbar]);
 
   // 處理DID連接請求
-  const handleDidConnect = async (data: QRCodeData) => {
+  const handleDidConnect = async (applicationId: string, issuerDomain: string) => {
     if (!isAuthenticated || !did) {
       showSnackbar('請先連接錢包', 'warning');
       return;
     }
     
-    if (!data.applicationId || !data.issuer) {
-      showSnackbar('缺少必要參數', 'error');
-      return;
-    }
-    
     try {
+      console.log(`處理 DID 連接請求: applicationId=${applicationId}, issuerDomain=${issuerDomain}`);
+      
       // 如果需要，產生消息簽名
-      const message = `關聯DID到申請 ${data.applicationId}`;
+      const message = `關聯DID到申請 ${applicationId}`;
       const signature = await signMessage(message);
       
-      // 建立API請求
-      const apiUrl = `http://${data.issuer}/api/application/${data.applicationId}/connect`;
+      // 使用API服務連接DID
+      const result = await credentialApi.connectDidToApplication(
+        issuerDomain,
+        applicationId,
+        did,
+        signature || undefined
+      );
       
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          did,
-          signature: signature ? Array.from(signature) : undefined
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`連接失敗: ${response.status} ${response.statusText}`);
+      if (result.success) {
+        showSnackbar('DID連接成功', 'success');
+        
+        // 延遲後導航回首頁
+        setTimeout(() => {
+          navigate('/');
+        }, 2000);
+      } else {
+        throw new Error(result.message || 'DID連接失敗');
       }
-            
-      showSnackbar('DID連接成功', 'success');
-      
-      // 延遲後導航回首頁
-      setTimeout(() => {
-        navigate('/');
-      }, 2000);
     } catch (error) {
       console.error('DID連接錯誤:', error);
       showSnackbar('DID連接失敗', 'error');
@@ -304,63 +227,40 @@ const AddCredentialPage = () => {
   };
 
   // 處理憑證發放請求
-  const handleCredentialOffer = async (data: QRCodeData) => {
+  const handleCredentialOffer = async (preAuthCode: string, issuerDomain: string) => {
     if (!isAuthenticated || !did) {
       showSnackbar('請先連接錢包', 'warning');
       return;
     }
     
-    if (!data.preAuthCode || !data.issuer) {
-      showSnackbar('缺少必要參數', 'error');
-      return;
-    }
-    
     try {
-      // 第1步：使用預授權碼獲取訪問令牌
-      const tokenUrl = `http://${data.issuer}/api/v1/token`;
+      console.log(`處理憑證預授權請求: preAuthCode=${preAuthCode}, issuerDomain=${issuerDomain}`);
       
-      const tokenResponse = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          'grant_type': 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': data.preAuthCode
-        })
-      });
-      
-      if (!tokenResponse.ok) {
-        throw new Error('獲取訪問令牌失敗');
+      // 獲取 Issuer 配置
+      try {
+        await credentialApi.getIssuerConfig(issuerDomain);
+        console.log('成功獲取 Issuer 配置');
+      } catch (error) {
+        console.error('獲取 Issuer 配置失敗:', error);
+        showSnackbar(`獲取 Issuer 配置失敗: ${error instanceof Error ? error.message : '未知錯誤'}`, 'error');
+        return;
       }
       
-      const tokenData = await tokenResponse.json();
-      const accessToken = tokenData.access_token;
+      // 第1步：使用預授權碼獲取訪問令牌
+      console.log('正在獲取訪問令牌...');
+      const tokenData = await credentialApi.getAccessToken(issuerDomain, preAuthCode);
+      console.log('成功獲取訪問令牌:', tokenData);
       
       // 第2步：使用訪問令牌請求憑證
-      const credentialUrl = `http://${data.issuer}/api/v1/credentials`;
-      
-      const credentialResponse = await fetch(credentialUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          'format': 'jwt_sd',
-          'credential_definition': {
-            'type': ['VerifiableCredential', 'NaturalPersonCredential']
-          }
-        })
-      });
-      
-      if (!credentialResponse.ok) {
-        throw new Error('獲取憑證失敗');
-      }
-      
-      const credentialData = await credentialResponse.json();
+      console.log('正在請求憑證...');
+      const credentialData = await credentialApi.getCredential(
+        issuerDomain, 
+        tokenData.access_token
+      );
+      console.log('成功獲取憑證數據');
       
       // 將獲取到的憑證添加到錢包
+      console.log('正在添加憑證到錢包...');
       const success = await addCredential(credentialData.credential);
       
       if (success) {
@@ -379,44 +279,8 @@ const AddCredentialPage = () => {
     }
   };
 
-  // 處理共享憑證
-  const handleCredentialShare = async (data: QRCodeData) => {
-    if (!data.credentialId) {
-      showSnackbar('缺少憑證ID', 'error');
-      return;
-    }
-    
-    try {
-      // 在實際應用中，這裡您可能需要從某個API獲取共享的憑證
-      const response = await fetch(`/api/shared-credential/${data.credentialId}`);
-      
-      if (!response.ok) {
-        throw new Error('獲取共享憑證失敗');
-      }
-      
-      const credential = await response.json();
-      
-      // 添加憑證到錢包
-      const success = await addCredential(credential);
-      
-      if (success) {
-        showSnackbar('共享憑證已添加到您的錢包', 'success');
-        
-        // 延遲後導航回首頁
-        setTimeout(() => {
-          navigate('/');
-        }, 2000);
-      } else {
-        throw new Error('無法添加共享憑證');
-      }
-    } catch (error) {
-      console.error('處理共享憑證錯誤:', error);
-      showSnackbar('獲取共享憑證失敗', 'error');
-    }
-  };
-
   // 處理文件選擇
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
     
@@ -438,10 +302,10 @@ const AddCredentialPage = () => {
     };
     
     reader.readAsText(file);
-  };
+  }, [showSnackbar]);
 
   // 處理JSON輸入
-  const handleJsonSubmit = async () => {
+  const handleJsonSubmit = useCallback(async () => {
     if (!jsonInput.trim()) {
       showSnackbar('請輸入憑證JSON或URL', 'warning');
       return;
@@ -453,10 +317,10 @@ const AddCredentialPage = () => {
       console.error('處理JSON輸入錯誤:', error);
       showSnackbar('處理憑證失敗', 'error');
     }
-  };
+  }, [jsonInput, showSnackbar]);
 
   // 處理憑證數據
-  const processCredential = async (data: string) => {
+  const processCredential = useCallback(async (data: string) => {
     setIsProcessing(true);
     try {
       // 如果是URL，嘗試獲取內容
@@ -488,7 +352,7 @@ const AddCredentialPage = () => {
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [addCredential, navigate, showSnackbar]);
 
   // 處理組件卸載
   useEffect(() => {
@@ -496,7 +360,7 @@ const AddCredentialPage = () => {
       // 確保停止掃描器
       stopScanner();
     };
-  }, []);
+  }, [stopScanner]);
 
   // 當對話框打開時啟動掃描器
   useEffect(() => {
@@ -506,7 +370,7 @@ const AddCredentialPage = () => {
         startScanner();
       }, 500);
     }
-  }, [scannerOpen]);
+  }, [scannerOpen, startScanner]);
 
   return (
     <Box>
@@ -656,7 +520,7 @@ const AddCredentialPage = () => {
         </DialogActions>
       </Dialog>
       
-      {/* 啟動掃描器 */}
+      {/* 隱藏的掃描器容器 */}
       <Dialog
         open={false}
         onClose={() => {}}
